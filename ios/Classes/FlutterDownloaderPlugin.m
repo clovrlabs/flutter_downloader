@@ -101,23 +101,18 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
 
         NSBundle *mainBundle = [NSBundle mainBundle];
 
-        // init NSURLSession in background isolate
-        if (_isolate) {
-            NSNumber *maxConcurrentTasks = [mainBundle objectForInfoDictionaryKey:@"FDMaximumConcurrentTasks"];
-            if (maxConcurrentTasks == nil) {
-                maxConcurrentTasks = @3;
-            }
-            if (debug) {
-                NSLog(@"MAXIMUM_CONCURRENT_TASKS = %@", maxConcurrentTasks);
-            }
-            // session identifier needs to be the same for background download and resume to work
-            NSString *identifier = [NSString stringWithFormat:@"%@.download.background.session", NSBundle.mainBundle.bundleIdentifier];
-            NSURLSessionConfiguration *sessionConfiguration = [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:identifier];
-            sessionConfiguration.HTTPMaximumConnectionsPerHost = [maxConcurrentTasks intValue];
-            _session = [NSURLSession sessionWithConfiguration:sessionConfiguration delegate:self delegateQueue:nil];
-            if (debug) {
-                NSLog(@"init NSURLSession with id: %@", [[_session configuration] identifier]);
-            }
+        NSNumber *maxConcurrentTasks = [mainBundle objectForInfoDictionaryKey:@"FDMaximumConcurrentTasks"];
+        if (maxConcurrentTasks == nil) {
+            maxConcurrentTasks = @3;
+        }
+        if (debug) {
+            NSLog(@"MAXIMUM_CONCURRENT_TASKS = %@", maxConcurrentTasks);
+        }
+        NSURLSessionConfiguration *sessionConfiguration = [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:[NSString stringWithFormat:@"%@.download.background.%f", NSBundle.mainBundle.bundleIdentifier, [[NSDate date] timeIntervalSince1970]]];
+        sessionConfiguration.HTTPMaximumConnectionsPerHost = [maxConcurrentTasks intValue];
+        _session = [NSURLSession sessionWithConfiguration:sessionConfiguration delegate:self delegateQueue:nil];
+        if (debug) {
+            NSLog(@"init NSURLSession with id: %@", [[_session configuration] identifier]);
         }
     }
 
