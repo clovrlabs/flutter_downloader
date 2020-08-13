@@ -35,7 +35,7 @@
     FlutterMethodChannel *_callbackChannel;
     NSObject<FlutterPluginRegistrar> *_registrar;
     DBManager *_dbManager;
-    NSString *_allFilesDownloadedMsg;
+    NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById;
     NSMutableArray *_eventQueue;
 }
 
@@ -118,14 +118,6 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
             if (debug) {
                 NSLog(@"init NSURLSession with id: %@", [[_session configuration] identifier]);
             }
-        }
-
-        _allFilesDownloadedMsg = [mainBundle objectForInfoDictionaryKey:@"FDAllFilesDownloadedMessage"];
-        if (_allFilesDownloadedMsg == nil) {
-            _allFilesDownloadedMsg = @"All files have been downloaded";
-        }
-        if (debug) {
-            NSLog(@"AllFilesDownloadedMessage: %@", _allFilesDownloadedMsg);
         }
     }
 
@@ -1029,11 +1021,6 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
                 [[NSOperationQueue mainQueue] addOperationWithBlock:^{
                     // Call the completion handler to tell the system that there are no other background transfers.
                     completionHandler();
-
-                    // Show a local notification when all downloads are over.
-                    UILocalNotification *localNotification = [[UILocalNotification alloc] init];
-                    localNotification.alertBody = self->_allFilesDownloadedMsg;
-                    [[UIApplication sharedApplication] presentLocalNotificationNow:localNotification];
                 }];
             }
         }
