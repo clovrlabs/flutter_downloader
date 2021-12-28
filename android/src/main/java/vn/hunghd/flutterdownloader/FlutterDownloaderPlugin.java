@@ -1,9 +1,14 @@
 package vn.hunghd.flutterdownloader;
 
 import android.annotation.SuppressLint;
+import android.content.ContentResolver;
+import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.MediaStore;
 
 import androidx.core.app.NotificationManagerCompat;
 
@@ -71,7 +76,7 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
     public void onMethodCall(MethodCall call, MethodChannel.Result result) {
         if (call.method.equals("initialize")) {
             initialize(call, result);
-        } else if (call.method.equals("registerCallback"))  {
+        } else if (call.method.equals("registerCallback")) {
             registerCallback(call, result);
         } else if (call.method.equals("enqueue")) {
             enqueue(call, result);
@@ -112,7 +117,9 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
         }
     }
 
-    private WorkRequest buildRequest(String url, String savedDir, String filename, String headers, boolean showNotification, boolean openFileFromNotification, boolean isResume, boolean requiresStorageNotLow) {
+    private WorkRequest buildRequest(String url, String savedDir, String filename, String headers,
+                                     boolean showNotification, boolean openFileFromNotification,
+                                     boolean isResume, boolean requiresStorageNotLow, boolean saveInPublicStorage) {
         WorkRequest request = new OneTimeWorkRequest.Builder(DownloadWorker.class)
                 .setConstraints(new Constraints.Builder()
                         .setRequiresStorageNotLow(requiresStorageNotLow)
@@ -130,6 +137,7 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
                         .putBoolean(DownloadWorker.ARG_IS_RESUME, isResume)
                         .putLong(DownloadWorker.ARG_CALLBACK_HANDLE, callbackHandle)
                         .putBoolean(DownloadWorker.ARG_DEBUG, debugMode == 1)
+                        .putBoolean(DownloadWorker.ARG_SAVE_IN_PUBLIC_STORAGE, saveInPublicStorage)
                         .build()
                 )
                 .build();
@@ -169,12 +177,15 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
         boolean showNotification = call.argument("show_notification");
         boolean openFileFromNotification = call.argument("open_file_from_notification");
         boolean requiresStorageNotLow = call.argument("requires_storage_not_low");
-        WorkRequest request = buildRequest(url, savedDir, filename, headers, showNotification, openFileFromNotification, false, requiresStorageNotLow);
+        boolean saveInPublicStorage = call.argument("save_in_public_storage");
+        WorkRequest request = buildRequest(url, savedDir, filename, headers, showNotification,
+                openFileFromNotification, false, requiresStorageNotLow, saveInPublicStorage);
         WorkManager.getInstance(context).enqueue(request);
         String taskId = request.getId().toString();
         result.success(taskId);
         sendUpdateProgress(taskId, DownloadStatus.ENQUEUED, 0);
-        taskDao.insertOrUpdateNewTask(taskId, url, DownloadStatus.ENQUEUED, 0, filename, savedDir, headers, showNotification, openFileFromNotification);
+        taskDao.insertOrUpdateNewTask(taskId, url, DownloadStatus.ENQUEUED, 0, filename,
+                savedDir, headers, showNotification, openFileFromNotification, saveInPublicStorage);
     }
 
     private void loadTasks(MethodCall call, MethodChannel.Result result) {
@@ -225,7 +236,10 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
 
     private void pause(MethodCall call, MethodChannel.Result result) {
         String taskId = call.argument("task_id");
+        // mark the current task is cancelled to process pause request
+        // the worker will depends on this flag to prepare data for resume request
         taskDao.updateTask(taskId, true);
+        // cancel running task, this method causes WorkManager.isStopped() turning true and the download loop will be stopped
         WorkManager.getInstance(context).cancelWorkById(UUID.fromString(taskId));
         result.success(null);
     }
@@ -243,13 +257,16 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
                 String partialFilePath = task.savedDir + File.separator + filename;
                 File partialFile = new File(partialFilePath);
                 if (partialFile.exists()) {
-                    WorkRequest request = buildRequest(task.url, task.savedDir, task.filename, task.headers, task.showNotification, task.openFileFromNotification, true, requiresStorageNotLow);
+                    WorkRequest request = buildRequest(task.url, task.savedDir, task.filename,
+                            task.headers, task.showNotification, task.openFileFromNotification,
+                            true, requiresStorageNotLow, task.saveInPublicStorage);
                     String newTaskId = request.getId().toString();
                     result.success(newTaskId);
                     sendUpdateProgress(newTaskId, DownloadStatus.RUNNING, task.progress);
                     taskDao.updateTask(taskId, newTaskId, DownloadStatus.RUNNING, task.progress, false);
                     WorkManager.getInstance(context).enqueue(request);
                 } else {
+                    taskDao.updateTask(taskId, false);
                     result.error("invalid_data", "not found partial downloaded data, this task cannot be resumed", null);
                 }
             } else {
@@ -266,7 +283,9 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
         boolean requiresStorageNotLow = call.argument("requires_storage_not_low");
         if (task != null) {
             if (task.status == DownloadStatus.FAILED || task.status == DownloadStatus.CANCELED) {
-                WorkRequest request = buildRequest(task.url, task.savedDir, task.filename, task.headers, task.showNotification, task.openFileFromNotification, false, requiresStorageNotLow);
+                WorkRequest request = buildRequest(task.url, task.savedDir, task.filename,
+                        task.headers, task.showNotification, task.openFileFromNotification,
+                        false, requiresStorageNotLow, task.saveInPublicStorage);
                 String newTaskId = request.getId().toString();
                 result.success(newTaskId);
                 sendUpdateProgress(newTaskId, DownloadStatus.ENQUEUED, task.progress);
@@ -324,6 +343,7 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
                 String saveFilePath = task.savedDir + File.separator + filename;
                 File tempFile = new File(saveFilePath);
                 if (tempFile.exists()) {
+                    deleteFileInMediaStore(tempFile);
                     tempFile.delete();
                 }
             }
@@ -335,5 +355,43 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
         } else {
             result.error("invalid_task_id", "not found task corresponding to given task id", null);
         }
+    }
+
+    private void deleteFileInMediaStore(File file) {
+        // Set up the projection (we only need the ID)
+        String[] projection = {MediaStore.Images.Media._ID};
+
+        // Match on the file path
+        String imageSelection = MediaStore.Images.Media.DATA + " = ?";
+        String videoSelection = MediaStore.Video.Media.DATA + " = ?";
+        String[] selectionArgs = new String[]{file.getAbsolutePath()};
+
+        // Query for the ID of the media matching the file path
+        Uri imageQueryUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        Uri videoQueryUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
+
+        ContentResolver contentResolver = context.getContentResolver();
+
+        // search the file in image store first
+        Cursor imageCursor = contentResolver.query(imageQueryUri, projection, imageSelection, selectionArgs, null);
+        if (imageCursor != null && imageCursor.moveToFirst()) {
+            // We found the ID. Deleting the item via the content provider will also remove the file
+            long id = imageCursor.getLong(imageCursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID));
+            Uri deleteUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+            contentResolver.delete(deleteUri, null, null);
+        } else {
+            // File not found in image store DB, try to search in video store
+            Cursor videoCursor = contentResolver.query(imageQueryUri, projection, imageSelection, selectionArgs, null);
+            if (videoCursor != null && videoCursor.moveToFirst()) {
+                // We found the ID. Deleting the item via the content provider will also remove the file
+                long id = videoCursor.getLong(videoCursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID));
+                Uri deleteUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+                contentResolver.delete(deleteUri, null, null);
+            } else {
+                // can not find the file in media store DB at all
+            }
+            if (videoCursor != null) videoCursor.close();
+        }
+        if (imageCursor != null) imageCursor.close();
     }
 }
