@@ -1,6 +1,5 @@
 package vn.hunghd.flutterdownloader;
 
-import android.annotation.SuppressLint;
 import android.content.ContentResolver;
 import android.content.ContentUris;
 import android.content.Context;
@@ -10,6 +9,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.provider.MediaStore;
 
+import androidx.annotation.NonNull;
 import androidx.core.app.NotificationManagerCompat;
 
 import java.io.File;
@@ -33,7 +33,6 @@ import io.flutter.plugin.common.BinaryMessenger;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
-import io.flutter.plugin.common.PluginRegistry;
 
 public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin {
     private static final String CHANNEL = "vn.hunghd/downloader";
@@ -42,22 +41,15 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
     public static final String SHARED_PREFERENCES_KEY = "vn.hunghd.downloader.pref";
     public static final String CALLBACK_DISPATCHER_HANDLE_KEY = "callback_dispatcher_handle_key";
 
-    private static FlutterDownloaderPlugin instance;
     private MethodChannel flutterChannel;
-    private TaskDbHelper dbHelper;
     private TaskDao taskDao;
     private Context context;
     private long callbackHandle;
+    private int step;
     private int debugMode;
-    private final Object initializationLock = new Object();
+    private int ignoreSsl;
 
-    @SuppressLint("NewApi")
-    public static void registerWith(PluginRegistry.Registrar registrar) {
-        if (instance == null) {
-            instance = new FlutterDownloaderPlugin();
-        }
-        instance.onAttachedToEngine(registrar.context(), registrar.messenger());
-    }
+    private final Object initializationLock = new Object();
 
     public void onAttachedToEngine(Context applicationContext, BinaryMessenger messenger) {
         synchronized (initializationLock) {
@@ -67,13 +59,13 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
             this.context = applicationContext;
             flutterChannel = new MethodChannel(messenger, CHANNEL);
             flutterChannel.setMethodCallHandler(this);
-            dbHelper = TaskDbHelper.getInstance(context);
+            TaskDbHelper dbHelper = TaskDbHelper.getInstance(context);
             taskDao = new TaskDao(dbHelper);
         }
     }
 
     @Override
-    public void onMethodCall(MethodCall call, MethodChannel.Result result) {
+    public void onMethodCall(MethodCall call, @NonNull MethodChannel.Result result) {
         if (call.method.equals("initialize")) {
             initialize(call, result);
         } else if (call.method.equals("registerCallback")) {
@@ -109,7 +101,7 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
     }
 
     @Override
-    public void onDetachedFromEngine(FlutterPluginBinding binding) {
+    public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
         context = null;
         if (flutterChannel != null) {
             flutterChannel.setMethodCallHandler(null);
@@ -126,7 +118,7 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
                         .setRequiredNetworkType(NetworkType.CONNECTED)
                         .build())
                 .addTag(TAG)
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.SECONDS)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
                 .setInputData(new Data.Builder()
                         .putString(DownloadWorker.ARG_URL, url)
                         .putString(DownloadWorker.ARG_SAVED_DIR, savedDir)
@@ -136,7 +128,9 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
                         .putBoolean(DownloadWorker.ARG_OPEN_FILE_FROM_NOTIFICATION, openFileFromNotification)
                         .putBoolean(DownloadWorker.ARG_IS_RESUME, isResume)
                         .putLong(DownloadWorker.ARG_CALLBACK_HANDLE, callbackHandle)
+                        .putInt(DownloadWorker.ARG_STEP, step)
                         .putBoolean(DownloadWorker.ARG_DEBUG, debugMode == 1)
+                        .putBoolean(DownloadWorker.ARG_IGNORESSL, ignoreSsl == 1)
                         .putBoolean(DownloadWorker.ARG_SAVE_IN_PUBLIC_STORAGE, saveInPublicStorage)
                         .build()
                 )
@@ -156,6 +150,7 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
         List args = (List) call.arguments;
         long callbackHandle = Long.parseLong(args.get(0).toString());
         debugMode = Integer.parseInt(args.get(1).toString());
+        ignoreSsl = Integer.parseInt(args.get(2).toString());
 
         SharedPreferences pref = context.getSharedPreferences(SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE);
         pref.edit().putLong(CALLBACK_DISPATCHER_HANDLE_KEY, callbackHandle).apply();
@@ -166,6 +161,7 @@ public class FlutterDownloaderPlugin implements MethodCallHandler, FlutterPlugin
     private void registerCallback(MethodCall call, MethodChannel.Result result) {
         List args = (List) call.arguments;
         callbackHandle = Long.parseLong(args.get(0).toString());
+        step = Integer.parseInt(args.get(1).toString());
         result.success(null);
     }
 
