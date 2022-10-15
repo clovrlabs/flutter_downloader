@@ -276,6 +276,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
 - (void)sendUpdateProgressForTaskId: (NSString*)taskId inStatus: (NSNumber*) status andProgress: (NSNumber*) progress
 {
     NSArray *args = @[@(_callbackHandle), taskId, status, progress];
+    NSLog(@"sendUpdateProgressForTaskId: %ld, %d", _callbackHandle, initialized);
     if (initialized && _callbackHandle != 0) {
         [_callbackChannel invokeMethod:@"" arguments:args];
     } else {
@@ -592,9 +593,10 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
     result([NSNull null]);
 }
 
-- (void)registerCallbackMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {
+- (void)registerCallbackMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {   
     NSArray *arguments = call.arguments;
     _callbackHandle = [arguments[0] longLongValue];
+    NSLog(@"registerCallbackMethodCall: %ld, %d", _callbackHandle, initialized);
     _step = [arguments[1] intValue];
     if (initialized) [self unqueueStatusEvents];
     result([NSNull null]);
