@@ -967,6 +967,7 @@ static NSMutableDictionary<NSString*, NSMutableDictionary*> *_runningTaskById = 
     
     if (debug) {
         NSLog(@"%s HTTP status code: %ld", __FUNCTION__, httpStatusCode);
+        NSLog(@"Download completed with error: %@", error != nil ? [error localizedDescription] : @(httpStatusCode));
     }
     
     bool isSuccess = (httpStatusCode >= 200 && httpStatusCode < 300);
